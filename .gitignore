@@ -1,0 +1,13 @@
+.env
+node_modules
+
+# IDEs
+.idea
+
+#Hardhat files
+cache
+artifacts
+
+# Coverage
+coverage/
+coverage.json
