@@ -4,11 +4,11 @@ import "@nomiclabs/hardhat-web3";
 import "@nomiclabs/hardhat-ethers";
 import "hardhat-gas-reporter";
 import "hardhat-abi-exporter";
-import 'hardhat-contract-sizer';
+import "hardhat-contract-sizer";
 import "hardhat-spdx-license-identifier";
 import * as dotenv from "dotenv";
 
-require('solidity-coverage');
+//require('solidity-coverage');
 
 dotenv.config();
 const { PRIVKEY } = process.env;
@@ -28,17 +28,17 @@ module.exports = {
     mainnet: {
       url: "https://bsc-dataseed.binance.org/",
       chainId: 56,
-      accounts: [PRIVKEY],
+      accounts: process.env.PRIVKEY !== undefined ? [process.env.PRIVKEY] : [],
     },
     testnet: {
       url: "https://speedy-nodes-nyc.moralis.io/40d4cf0d9beaaf4ecdc0775f/bsc/testnet",
       chainId: 97,
-      accounts: [PRIVKEY],
+      accounts: process.env.PRIVKEY !== undefined ? [process.env.PRIVKEY] : [],
     },
     localhost: {
       chainId: 31337,
       url: "http://127.0.0.1:8545",
-      accounts: [PRIVKEY],
+      accounts: process.env.PRIVKEY !== undefined ? [process.env.PRIVKEY] : [],
     },
     hardhat: {
       forking: {
@@ -74,5 +74,5 @@ module.exports = {
     disambiguatePaths: false,
     runOnCompile: true,
     strict: true,
-  }
+  },
 };
