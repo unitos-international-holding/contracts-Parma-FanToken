@@ -2,17 +2,19 @@
 // Developed by: Scaling Parrot
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "./ParmaFanToken.sol";
 
 pragma solidity ^0.8.4;
 
-contract ParmaFanTokenM is ERC20, Ownable {
+contract ParmaFanTokenM is ERC20, AccessControl {
     using SafeMath for uint256;
 
     address public parmaFanTokenAddress;
+    uint256 public ParmaFanTokenLocked;
     uint256 public totalVestingAmount;
+    uint256 public totalRedeemedAmount;
     bool private lockTokensStatus = false;
 
     struct TokenVesting {
@@ -25,15 +27,46 @@ contract ParmaFanTokenM is ERC20, Ownable {
     }
     mapping(address => TokenVesting) private _vesting;
 
+    event TokensLocked(address admin, uint256 amount);
+    event TokensVested(
+        address beneficiary,
+        uint256 vestingType,
+        uint256 start,
+        uint256 cliff,
+        uint256 amount
+    );
+    event TokensRedeemed(address beneficiary, uint256 amount);
+
     constructor(address _parmaFanTokenAddress) ERC20("ParmaFanTokenM", "PFTM") {
         parmaFanTokenAddress = _parmaFanTokenAddress;
+
+        _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
+    }
+
+    //Ovveride ERC20 transfer function to make ParmaFanTokenM non-transferable
+    function transfer(
+        address recipient,
+        uint256 amount
+    ) public virtual override returns (bool) {
+        revert("ParmaFanTokenM: ParmaFanTokenM is non-transferable");
+    }
+
+    //Ovveride ERC20 transferFrom function to make ParmaFanTokenM non-transferable
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) public virtual override returns (bool) {
+        revert("ParmaFanTokenM: ParmaFanTokenM is non-transferable");
     }
 
     function getLockedTokens() public view returns (uint256) {
         return ParmaFanToken(parmaFanTokenAddress).balanceOf(address(this));
     }
 
-    function lockTokens(uint256 amount) public onlyOwner returns (bool) {
+    function lockTokens(
+        uint256 amount
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
         uint256 lockedTokens = getLockedTokens();
         require(!lockTokensStatus, "Tokens already lock");
         require(lockedTokens <= 0 && totalSupply() <= 0, "Tokens already lock");
@@ -45,9 +78,10 @@ contract ParmaFanTokenM is ERC20, Ownable {
             amount
         );
 
-        lockTokensStatus = true;
-        _mint(address(this), amount);
+        emit TokensLocked(_msgSender(), amount);
 
+        ParmaFanTokenLocked = amount;
+        lockTokensStatus = true;
         return lockTokensStatus;
     }
 
@@ -57,12 +91,11 @@ contract ParmaFanTokenM is ERC20, Ownable {
      * 3. 100% locked, can be unlocked in one go by admin
      * 4. 100% locked, unlockable at 5% per month from day 180 onwards.
      */
-
     function vestTokens(
         address beneficiary,
         uint256 amount,
         uint256 vestingType
-    ) public onlyOwner returns (bool) {
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
         require(
             !_vesting[beneficiary].locked,
             "ParmaFanTokenM: Tokens are already locked"
@@ -77,13 +110,12 @@ contract ParmaFanTokenM is ERC20, Ownable {
         );
         require(amount > 0, "ERC20: amount must be greater than 0");
         require(
-            ParmaFanToken(parmaFanTokenAddress).isBlacklisted(beneficiary) ==
-                false,
+            ParmaFanToken(parmaFanTokenAddress).isBlacklisted(beneficiary),
             "ParmaFanToken: beneficiary is in blacklist"
         );
         require(
-            totalVestingAmount.add(amount) <= totalSupply(),
-            "ParmaFanTokenM: totalVestingAmount is greater than totalSupply"
+            totalVestingAmount.add(amount) < ParmaFanTokenLocked,
+            "ParmaFanTokenM: totalVestingAmount is greater than ParmaFanTokenLocked"
         );
 
         if (vestingType == 1) {
@@ -100,12 +132,18 @@ contract ParmaFanTokenM is ERC20, Ownable {
                 beneficiary,
                 amount.mul(15).div(100)
             );
-            //Burn 15% of ParmaFanTokenM
-            _burn(address(this), amount.mul(20).div(100));
-            // Transfer 85% of ParmaFanTokenM to the beneficiary
-            _transfer(address(this), beneficiary, amount.mul(85).div(100));
+            // Mint 85% of amount in ParmaFanTokenM to the beneficiary
+            _mint(beneficiary, amount.mul(85).div(100));
 
             totalVestingAmount.add(amount);
+
+            emit TokensVested(
+                beneficiary,
+                1,
+                block.timestamp,
+                block.timestamp + 90 days,
+                amount
+            );
             return true;
         } else if (vestingType == 2) {
             _vesting[beneficiary] = TokenVesting(
@@ -121,12 +159,18 @@ contract ParmaFanTokenM is ERC20, Ownable {
                 beneficiary,
                 amount.mul(20).div(100)
             );
-            //Burn 20% of ParmaFanTokenM
-            _burn(address(this), amount.mul(20).div(100));
-            // Transfer 80% of ParmaFanTokenM to the beneficiary
-            _transfer(address(this), beneficiary, amount.mul(80).div(100));
+            //Mint 80% of amount in ParmaFanTokenM to the beneficiary
+            _mint(beneficiary, amount.mul(80).div(100));
 
             totalVestingAmount.add(amount);
+
+            emit TokensVested(
+                beneficiary,
+                2,
+                block.timestamp,
+                block.timestamp + 60 days,
+                amount
+            );
             return true;
         } else if (vestingType == 3) {
             _vesting[beneficiary] = TokenVesting(
@@ -138,10 +182,18 @@ contract ParmaFanTokenM is ERC20, Ownable {
                 true
             );
 
-            // Transfer 100% of ParmaFanTokenM to the beneficiary
-            _transfer(address(this), beneficiary, amount);
+            //Mint 100% of amount in ParmaFanTokenM to the beneficiary
+            _mint(beneficiary, amount);
 
             totalVestingAmount.add(amount);
+
+            emit TokensVested(
+                beneficiary,
+                3,
+                block.timestamp,
+                block.timestamp,
+                amount
+            );
             return true;
         } else if (vestingType == 4) {
             _vesting[beneficiary] = TokenVesting(
@@ -153,10 +205,18 @@ contract ParmaFanTokenM is ERC20, Ownable {
                 true
             );
 
-            // Transfer 100% of ParmaFanTokenM to the beneficiary
-            _transfer(address(this), beneficiary, amount);
+            //Mint 100% of amount in ParmaFanTokenM to the beneficiary
+            _mint(beneficiary, amount);
 
             totalVestingAmount.add(amount);
+
+            emit TokensVested(
+                beneficiary,
+                4,
+                block.timestamp,
+                block.timestamp + 180 days,
+                amount
+            );
             return true;
         }
         return false;
@@ -174,16 +234,16 @@ contract ParmaFanTokenM is ERC20, Ownable {
 
         uint256 amount = _calcTokenToUnlock(beneficiary);
 
-        // Check if the msg.sender has enough ParmaFanTokenM to redeem
+        // Check if the beneficiary has enough ParmaFanTokenM to redeem
         require(
-            balanceOf(_msgSender()) >= amount,
+            balanceOf(beneficiary) >= amount,
             "ParmaFanTokenM: Not enough tokens to redeem"
         );
 
         if (_vesting[beneficiary].vestingType == 3) {
             require(
-                msg.sender == owner(),
-                "ParmaFanTokenM: Only owner can redeem this vesting type"
+                hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
+                "ParmaFanTokenM: Only admin can redeem this vesting type"
             );
             // Send ParmaFanToken to the beneficiary
             ParmaFanToken(parmaFanTokenAddress).transfer(beneficiary, amount);
@@ -193,8 +253,9 @@ contract ParmaFanTokenM is ERC20, Ownable {
             _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
                 amount
             );
-            totalVestingAmount.sub(amount);
+            totalRedeemedAmount.add(amount);
 
+            emit TokensRedeemed(beneficiary, amount);
             return amount;
         } else {
             require(
@@ -209,8 +270,9 @@ contract ParmaFanTokenM is ERC20, Ownable {
             _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
                 amount
             );
-            totalVestingAmount.sub(amount);
+            totalRedeemedAmount.add(amount);
 
+            emit TokensRedeemed(beneficiary, amount);
             return amount;
         }
     }
@@ -223,6 +285,10 @@ contract ParmaFanTokenM is ERC20, Ownable {
         require(
             _vesting[beneficiary].amount - _vesting[beneficiary].redeemed > 0,
             "ParmaFanTokenM: No tokens to unlock"
+        );
+        require(
+            block.timestamp >= _vesting[beneficiary].cliff,
+            "ParmaFanTokenM: Tokens are not unlockable yet"
         );
 
         uint256 amount;
