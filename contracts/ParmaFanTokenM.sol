@@ -6,8 +6,6 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "./ParmaFanToken.sol";
 
-import "hardhat/console.sol";
-
 contract ParmaFanTokenM is AccessControl, ERC20 {
     using SafeMath for uint256;
 
@@ -182,9 +180,9 @@ contract ParmaFanTokenM is AccessControl, ERC20 {
     }
 
     /**
-    * @dev Swap COCM unlock in caller address to COC caller address
+    * @dev Swap tokenM unlock in caller address to Token caller address
     *
-    * Emit `COCMSwapped`
+    * Emit `TokenMSwapped`
     *
     * Requirements
     * - Token **MUST** be unlocked
