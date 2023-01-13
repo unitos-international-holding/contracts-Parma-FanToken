@@ -1,356 +1,210 @@
-// SPDX-License-Identifier: ISC
-// Developed by: Scaling Parrot
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "./ParmaFanToken.sol";
 
-pragma solidity ^0.8.4;
+import "hardhat/console.sol";
 
-contract ParmaFanTokenM is ERC20, AccessControl {
+contract ParmaFanTokenM is AccessControl, ERC20 {
     using SafeMath for uint256;
 
     address public parmaFanTokenAddress;
-    uint256 public ParmaFanTokenLocked;
-    uint256 public totalVestingAmount;
-    uint256 public totalRedeemedAmount;
-    bool private lockTokensStatus = false;
 
-    struct TokenVesting {
-        uint256 vestingType;
-        uint256 start;
-        uint256 cliff;
-        uint256 amount;
-        uint256 redeemed;
-        bool locked;
+    struct LockInfo {
+        uint256 amountUnlock;
+        uint256 swapped;
+        uint256 timestampLock;
+        bool lockedByAdmin;
+        bool unlockManual;
     }
-    mapping(address => TokenVesting) private _vesting;
 
-    event TokensLocked(address admin, uint256 amount);
-    event TokensVested(
-        address beneficiary,
-        uint256 vestingType,
-        uint256 start,
-        uint256 cliff,
-        uint256 amount
-    );
-    event TokensRedeemed(address beneficiary, uint256 amount);
+    mapping(address => LockInfo) _addressLockInfo;
 
-    constructor(address _parmaFanTokenAddress) ERC20("ParmaFanTokenM", "PFTM") {
+    uint256 TIME_ONE_MONTH = 2629743;
+    uint256 TIME_SIX_MONTH = TIME_ONE_MONTH * 6;
+
+    event BalanceUnlocked(address indexed from, address indexed addressUnlocked);
+    event ParmaMSwapped(address indexed from, uint256 amount);
+
+    constructor(string memory _name, string memory _symbol, address _parmaFanTokenAddress) ERC20(_name, _symbol) {
         parmaFanTokenAddress = _parmaFanTokenAddress;
 
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
     }
 
-    //Ovveride ERC20 transfer function to make ParmaFanTokenM non-transferable
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) public virtual override returns (bool) {
-        revert("ParmaFanTokenM: ParmaFanTokenM is non-transferable");
+    function changeParmaToken(
+        address _tokenContract
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool){
+        parmaFanTokenAddress = _tokenContract;
+        return true;
     }
 
-    //Ovveride ERC20 transferFrom function to make ParmaFanTokenM non-transferable
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) public virtual override returns (bool) {
-        revert("ParmaFanTokenM: ParmaFanTokenM is non-transferable");
-    }
-
-    function getLockedTokens() public view returns (uint256) {
+    /**
+     * @dev Return Parma Fan Token balance locked in contract Parma M
+     */
+    function getTokenLockedInContract() public view returns (uint256) {
         return ParmaFanToken(parmaFanTokenAddress).balanceOf(address(this));
     }
 
-    function lockTokens(
-        uint256 amount
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
-        uint256 lockedTokens = getLockedTokens();
-        require(!lockTokensStatus, "Tokens already lock");
-        require(lockedTokens <= 0 && totalSupply() <= 0, "Tokens already lock");
+    /**
+    * @dev Send quantity of `amount_` in balance address `to_`
+    * Emit `Transfer`
+    *
+    * Requirements
+    * - Caller **MUST** is an admin
+    * - User have not already token locked, `balanceOf` == 0
+    * - Balance locked in contract **MUST** be > to `amount_`
+    */
+    function deliverToAccount(address _to, uint _amount, uint _type) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
+        require(balanceOf(_to) == 0, "ParmaFanTokenM: user have already token locked");
+        require(_type > 0 && _type < 5, "ParmaFanTokenM: user have already token locked");
 
-        ParmaFanToken(parmaFanTokenAddress).approve(address(this), amount);
-        ParmaFanToken(parmaFanTokenAddress).transferFrom(
-            _msgSender(),
-            address(this),
-            amount
-        );
+        uint256 tokenLocked = getTokenLockedInContract();
+        require((tokenLocked - totalSupply() + 1) > _amount, "ParmaFanTokenM: Balance enough of token locked");
 
-        emit TokensLocked(_msgSender(), amount);
+        LockInfo memory lockInfoAddress;
+        uint amountToMint;
+        uint amountToSend;
+        if(_type == 1) {
+            amountToMint = _amount.mul(85).div(100);
+            amountToSend = _amount.mul(15).div(100);
 
-        ParmaFanTokenLocked = amount;
-        lockTokensStatus = true;
-        return lockTokensStatus;
-    }
+            lockInfoAddress.amountUnlock = _amount.mul(5).div(100);
+            lockInfoAddress.timestampLock = block.timestamp + TIME_ONE_MONTH * 2;
+            lockInfoAddress.lockedByAdmin = false;
+            lockInfoAddress.unlockManual = false;
+            lockInfoAddress.swapped = 0;
 
-    /*
-     * 1. 15% of the immediately unlocked value, from the 90th day the contract lets you unlock 5% for the next 17 months
-     * 2. 20% of the immediately unlocked value, from the 60th day allows you to unlock 13.33% for the following 6 months
-     * 3. 100% locked, can be unlocked in one go by admin
-     * 4. 100% locked, unlockable at 5% per month from day 180 onwards.
-     */
-    function vestTokens(
-        address beneficiary,
-        uint256 amount,
-        uint256 vestingType
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
-        require(
-            !_vesting[beneficiary].locked,
-            "ParmaFanTokenM: Tokens are already locked"
-        );
-        require(
-            vestingType > 0 && vestingType < 5,
-            "ParmaFanTokenM: vesting type must be between 1 and 4"
-        );
-        require(
-            beneficiary != address(0),
-            "ERC20: transfer to the zero address"
-        );
-        require(amount > 0, "ERC20: amount must be greater than 0");
-        require(
-            ParmaFanToken(parmaFanTokenAddress).isBlacklisted(beneficiary),
-            "ParmaFanToken: beneficiary is in blacklist"
-        );
-        require(
-            totalVestingAmount.add(amount) < ParmaFanTokenLocked,
-            "ParmaFanTokenM: totalVestingAmount is greater than ParmaFanTokenLocked"
-        );
-
-        if (vestingType == 1) {
-            _vesting[beneficiary] = TokenVesting(
-                1,
-                block.timestamp,
-                block.timestamp + 90 days,
-                amount,
-                amount.mul(15).div(100),
-                true
-            );
-            // Transfer 15% of ParmaFanToken to the beneficiary
-            ParmaFanToken(parmaFanTokenAddress).transfer(
-                beneficiary,
-                amount.mul(15).div(100)
-            );
-            // Mint 85% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount.mul(85).div(100));
-
-            totalVestingAmount.add(amount);
-
-            emit TokensVested(
-                beneficiary,
-                1,
-                block.timestamp,
-                block.timestamp + 90 days,
-                amount
-            );
-            return true;
-        } else if (vestingType == 2) {
-            _vesting[beneficiary] = TokenVesting(
-                2,
-                block.timestamp,
-                block.timestamp + 60 days,
-                amount,
-                amount.mul(20).div(100),
-                true
-            );
-            // Transfer 20% of ParmaFanToken to the beneficiary
-            ParmaFanToken(parmaFanTokenAddress).transfer(
-                beneficiary,
-                amount.mul(20).div(100)
-            );
-            //Mint 80% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount.mul(80).div(100));
-
-            totalVestingAmount.add(amount);
-
-            emit TokensVested(
-                beneficiary,
-                2,
-                block.timestamp,
-                block.timestamp + 60 days,
-                amount
-            );
-            return true;
-        } else if (vestingType == 3) {
-            _vesting[beneficiary] = TokenVesting(
-                3,
-                block.timestamp,
-                block.timestamp,
-                amount,
-                0,
-                true
-            );
-
-            //Mint 100% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount);
-
-            totalVestingAmount.add(amount);
-
-            emit TokensVested(
-                beneficiary,
-                3,
-                block.timestamp,
-                block.timestamp,
-                amount
-            );
-            return true;
-        } else if (vestingType == 4) {
-            _vesting[beneficiary] = TokenVesting(
-                4,
-                block.timestamp,
-                block.timestamp + 180 days,
-                amount,
-                0,
-                true
-            );
-
-            //Mint 100% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount);
-
-            totalVestingAmount.add(amount);
-
-            emit TokensVested(
-                beneficiary,
-                4,
-                block.timestamp,
-                block.timestamp + 180 days,
-                amount
-            );
-            return true;
         }
-        return false;
-    }
+        if(_type == 2) {
+            amountToMint = _amount.mul(80).div(100);
+            amountToSend = _amount.mul(20).div(100);
 
-    function redeemVesting(address beneficiary) public returns (uint256) {
-        require(
-            _vesting[beneficiary].locked,
-            "ParmaFanTokenM: Tokens are not locked"
-        );
-        require(
-            _vesting[beneficiary].amount - _vesting[beneficiary].redeemed > 0,
-            "ParmaFanTokenM: No tokens to unlock"
-        );
+            lockInfoAddress.amountUnlock = _amount.mul(1333).div(10000);
+            lockInfoAddress.timestampLock = block.timestamp + TIME_ONE_MONTH;
+            lockInfoAddress.lockedByAdmin = false;
+            lockInfoAddress.unlockManual = false;
+            lockInfoAddress.swapped = 0;
 
-        uint256 amount = _calcTokenToUnlock(beneficiary);
-
-        // Check if the beneficiary has enough ParmaFanTokenM to redeem
-        require(
-            balanceOf(beneficiary) >= amount,
-            "ParmaFanTokenM: Not enough tokens to redeem"
-        );
-
-        if (_vesting[beneficiary].vestingType == 3) {
-            require(
-                hasRole(DEFAULT_ADMIN_ROLE, msg.sender),
-                "ParmaFanTokenM: Only admin can redeem this vesting type"
-            );
-            // Send ParmaFanToken to the beneficiary
-            ParmaFanToken(parmaFanTokenAddress).transfer(beneficiary, amount);
-            //Burn ParmaFanTokenM from the beneficiary
-            _burn(beneficiary, amount);
-
-            _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
-                amount
-            );
-            totalRedeemedAmount.add(amount);
-
-            emit TokensRedeemed(beneficiary, amount);
-            return amount;
-        } else {
-            require(
-                beneficiary == msg.sender,
-                "ParmaFanTokenM: Only beneficiary can redeem this vesting type"
-            );
-            // Send ParmaFanToken to the beneficiary
-            ParmaFanToken(parmaFanTokenAddress).transfer(beneficiary, amount);
-            //Burn ParmaFanTokenM from the msg.sender
-            _burn(beneficiary, amount);
-
-            _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
-                amount
-            );
-            totalRedeemedAmount.add(amount);
-
-            emit TokensRedeemed(beneficiary, amount);
-            return amount;
         }
-    }
+        if(_type == 3) {
+            amountToMint = _amount;
+            amountToSend = 0;
 
-    // Internal function
+            lockInfoAddress.amountUnlock = _amount.mul(5).div(100);
+            lockInfoAddress.timestampLock = block.timestamp + TIME_ONE_MONTH * 5;
+            lockInfoAddress.lockedByAdmin = false;
+            lockInfoAddress.unlockManual = false;
+            lockInfoAddress.swapped = 0;
 
-    function _calcTokenToUnlock(
-        address beneficiary
-    ) internal view returns (uint256) {
-        require(
-            _vesting[beneficiary].amount - _vesting[beneficiary].redeemed > 0,
-            "ParmaFanTokenM: No tokens to unlock"
-        );
-        require(
-            block.timestamp >= _vesting[beneficiary].cliff,
-            "ParmaFanTokenM: Tokens are not unlockable yet"
-        );
+        }
+        if(_type == 4) {
+            amountToMint = _amount;
+            amountToSend = 0;
 
-        uint256 amount;
-        if (
-            _vesting[beneficiary].vestingType == 1 ||
-            _vesting[beneficiary].vestingType == 4
-        ) {
-            uint timeDiff = block.timestamp - _vesting[beneficiary].start;
-            uint timeDiffInMonths = (timeDiff / 30 days) -
-                (_vesting[beneficiary].cliff / 30 days);
+            lockInfoAddress.amountUnlock = _amount;
+            lockInfoAddress.timestampLock = 0;
+            lockInfoAddress.lockedByAdmin = true;
+            lockInfoAddress.unlockManual = true;
+            lockInfoAddress.swapped = 0;
 
-            require(
-                timeDiffInMonths > 0,
-                "ParmaFanTokenM: Tokens are not unlockable yet"
-            );
-
-            uint256 monthlyRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(5)
-                .div(100);
-
-            // 5% of the total amount of tokens to unlock every month
-            uint256 totalAmountRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(15)
-                .div(100) / 5;
-            uint256 amountRedemptions = (_vesting[beneficiary].amount -
-                _vesting[beneficiary].redeemed) / 5;
-
-            amount =
-                (totalAmountRedemptions - amountRedemptions) *
-                monthlyRedemptions;
-        } else if (_vesting[beneficiary].vestingType == 2) {
-            uint timeDiff = block.timestamp - _vesting[beneficiary].start;
-            uint timeDiffInMonths = (timeDiff / 30 days) -
-                (_vesting[beneficiary].cliff / 30 days);
-
-            require(
-                timeDiffInMonths > 0,
-                "ParmaFanTokenM: Tokens are not unlockable yet"
-            );
-
-            uint256 monthlyRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(1333)
-                .div(10000);
-
-            // 5% of the total amount of tokens to unlock every month
-            uint256 totalAmountRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(20)
-                .div(1333);
-            uint256 amountRedemptions = (_vesting[beneficiary].amount -
-                _vesting[beneficiary].redeemed).mul(100).div(1333);
-
-            amount =
-                (totalAmountRedemptions - amountRedemptions) *
-                monthlyRedemptions;
-        } else if (_vesting[beneficiary].vestingType == 3) {
-            amount = _vesting[beneficiary].amount;
         }
 
-        return amount;
+        _addressLockInfo[_to] = lockInfoAddress;
+
+        if(amountToSend > 0 ) {
+            ParmaFanToken(parmaFanTokenAddress).transfer(_to, amountToSend);
+        }
+
+        if(amountToMint != 0) {
+            _mint(_to, amountToMint);
+        }
+
+        return true;
     }
+
+    /**
+    * @dev Returns info of lock token by `owner_` address
+    * order of return `amountUnlock`, `timestampUnlock`, `lockedByAdmin`, `unlockManual`
+    */
+    function getInfoLockedByAddress(address owner_) public view returns(uint256, uint256, bool, bool) {
+        uint256 amountUnlock = _addressLockInfo[owner_].amountUnlock;
+        uint256 timestampUnlock = _addressLockInfo[owner_].timestampLock;
+        bool lockedByAdmin = _addressLockInfo[owner_].lockedByAdmin;
+        bool unlockManual = _addressLockInfo[owner_].unlockManual;
+
+        return (amountUnlock, timestampUnlock, lockedByAdmin, unlockManual);
+    }
+
+    /**
+    * @dev Returns how much token are unlocked by `owner_`
+    */
+    function getTokenUnlock(address _owner) public view returns(uint256) {
+        LockInfo memory lockInfoAddress = _addressLockInfo[_owner];
+
+        if (lockInfoAddress.lockedByAdmin) {
+            return 0;
+        }
+        if (lockInfoAddress.unlockManual) {
+            return lockInfoAddress.amountUnlock;
+        }
+
+        if (block.timestamp < lockInfoAddress.timestampLock) {
+            return 0;
+        }
+        uint256 rate = (block.timestamp - lockInfoAddress.timestampLock) / TIME_ONE_MONTH;
+        if (rate == 0) {
+            return 0;
+        }
+        if (((lockInfoAddress.amountUnlock * rate) - lockInfoAddress.swapped) > balanceOf(_owner)) {
+            return balanceOf(_owner);
+        }
+        return (lockInfoAddress.amountUnlock * rate) - lockInfoAddress.swapped;
+    }
+
+    /**
+    * @dev Unlock manual swap for `unlockAddress_`
+    *
+    * Emit `BalanceUnlocked`
+    *
+    * Requirements:
+    * - Swap **MUST** be locked by admin to can unlock it
+    */
+    function unlockSwap(address unlockAddress_) public onlyRole(DEFAULT_ADMIN_ROLE) returns(bool) {
+        require(_addressLockInfo[unlockAddress_].lockedByAdmin, "ParmaFanTokenM: Address amount is not locked by admin");
+
+        _addressLockInfo[unlockAddress_].lockedByAdmin = false;
+        emit BalanceUnlocked(_msgSender(), unlockAddress_);
+        return true;
+    }
+
+    /**
+    * @dev Swap COCM unlock in caller address to COC caller address
+    *
+    * Emit `COCMSwapped`
+    *
+    * Requirements
+    * - Token **MUST** be unlocked
+    */
+    function swapTokenUnlock() public returns(bool) {
+        require(balanceOf(msg.sender) > 0, "ParmaFanTokenM: balance of sender is 0");
+
+        LockInfo memory lockInfoAddress = _addressLockInfo[_msgSender()];
+        require(block.timestamp > lockInfoAddress.timestampLock, "ParmaFanTokenM: token is already locked");
+        require(!lockInfoAddress.lockedByAdmin, "ParmaFanTokenM: swap is already locked by admin");
+        uint256 tokenToUnlock = getTokenUnlock(msg.sender);
+
+        ParmaFanToken(parmaFanTokenAddress).transfer(msg.sender, tokenToUnlock);
+
+        _addressLockInfo[msg.sender].swapped = _addressLockInfo[msg.sender].swapped + tokenToUnlock;
+        _burn(msg.sender, tokenToUnlock);
+
+        emit ParmaMSwapped(msg.sender, tokenToUnlock);
+
+        return true;
+    }
+
 }

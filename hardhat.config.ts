@@ -41,10 +41,10 @@ module.exports = {
       accounts: process.env.PRIVKEY !== undefined ? [process.env.PRIVKEY] : [],
     },
     hardhat: {
-      forking: {
+      /*forking: {
         //url: "https://speedy-nodes-nyc.moralis.io/40d4cf0d9beaaf4ecdc0775f/bsc/mainnet",
         url: "https://bsc-dataseed.binance.org/",
-      },
+      },*/
     },
   },
   etherscan: {
