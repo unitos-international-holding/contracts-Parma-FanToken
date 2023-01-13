@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: ISC
 // Developed by: Scaling Parrots
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-import "./ParmaFanToken.sol";
-
 pragma solidity ^0.8.4;
 
-contract ParmaFanTokenM_backup is ERC20, AccessControl {
-    using SafeMath for uint256;
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./ParmaFanToken.sol";
 
+contract ParmaFanTokenM_backup is ERC20, AccessControl {
     address public parmaFanTokenAddress;
     uint256 public ParmaFanTokenLocked;
     uint256 public totalVestingAmount;
@@ -37,7 +34,11 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
     );
     event TokensRedeemed(address beneficiary, uint256 amount);
 
-    constructor(string memory name, string memory symbol ,address _parmaFanTokenAddress) ERC20(name, symbol) {
+    constructor(
+        string memory name,
+        string memory symbol,
+        address _parmaFanTokenAddress
+    ) ERC20(name, symbol) {
         parmaFanTokenAddress = _parmaFanTokenAddress;
 
         _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
@@ -64,14 +65,36 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
         return ParmaFanToken(parmaFanTokenAddress).balanceOf(address(this));
     }
 
+    function getAddressDetails(
+        address account
+    )
+        public
+        view
+        returns (
+            uint256 vestingType,
+            uint256 start,
+            uint256 cliff,
+            uint256 amount,
+            uint256 redeemed,
+            bool locked
+        )
+    {
+        TokenVesting storage vesting = _vesting[account];
+        return (
+            vesting.vestingType,
+            vesting.start,
+            vesting.cliff,
+            vesting.amount,
+            vesting.redeemed,
+            vesting.locked
+        );
+    }
+
     function lockTokens(
         uint256 amount
     ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
-        uint256 lockedTokens = getLockedTokens();
-        //require(!lockTokensStatus, "Tokens already lock");
-        //require(lockedTokens <= 0 && totalSupply() <= 0, "Tokens already lock");
+        require(!lockTokensStatus, "Tokens already lock");
 
-        //ParmaFanToken(parmaFanTokenAddress).approve(address(this), amount);
         ParmaFanToken(parmaFanTokenAddress).transferFrom(
             _msgSender(),
             address(this),
@@ -114,7 +137,7 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             "ParmaFanToken: beneficiary is in blacklist"
         );
         require(
-            totalVestingAmount.add(amount) < getLockedTokens() + totalSupply(),
+            totalVestingAmount + amount < getLockedTokens() + totalSupply(),
             "ParmaFanTokenM: totalVestingAmount is greater than ParmaFanTokenLocked"
         );
 
@@ -124,18 +147,19 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
                 block.timestamp,
                 block.timestamp + 90 days,
                 amount,
-                amount.mul(15).div(100),
+                (amount * 15) / 100,
                 true
             );
             // Transfer 15% of ParmaFanToken to the beneficiary
             ParmaFanToken(parmaFanTokenAddress).transfer(
                 beneficiary,
-                amount.mul(15).div(100)
+                (amount * 15) / 100
             );
             // Mint 85% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount.mul(85).div(100));
+            _mint(beneficiary, (amount * 85) / 100);
 
-            totalVestingAmount.add(amount);
+            totalVestingAmount += amount;
+            totalRedeemedAmount += (amount * 15) / 100;
 
             emit TokensVested(
                 beneficiary,
@@ -151,18 +175,19 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
                 block.timestamp,
                 block.timestamp + 60 days,
                 amount,
-                amount.mul(20).div(100),
+                (amount * 20) / 100,
                 true
             );
             // Transfer 20% of ParmaFanToken to the beneficiary
             ParmaFanToken(parmaFanTokenAddress).transfer(
                 beneficiary,
-                amount.mul(20).div(100)
+                (amount * 20) / 100
             );
             //Mint 80% of amount in ParmaFanTokenM to the beneficiary
-            _mint(beneficiary, amount.mul(80).div(100));
+            _mint(beneficiary, (amount * 80) / 100);
 
-            totalVestingAmount.add(amount);
+            totalVestingAmount += amount;
+            totalRedeemedAmount += (amount * 20) / 100;
 
             emit TokensVested(
                 beneficiary,
@@ -185,7 +210,7 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             //Mint 100% of amount in ParmaFanTokenM to the beneficiary
             _mint(beneficiary, amount);
 
-            totalVestingAmount.add(amount);
+            totalVestingAmount += amount;
 
             emit TokensVested(
                 beneficiary,
@@ -208,7 +233,7 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             //Mint 100% of amount in ParmaFanTokenM to the beneficiary
             _mint(beneficiary, amount);
 
-            totalVestingAmount.add(amount);
+            totalVestingAmount += amount;
 
             emit TokensVested(
                 beneficiary,
@@ -250,10 +275,9 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             //Burn ParmaFanTokenM from the beneficiary
             _burn(beneficiary, amount);
 
-            _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
-                amount
-            );
-            totalRedeemedAmount.add(amount);
+            _vesting[beneficiary].redeemed = _vesting[beneficiary]
+                .redeemed += amount;
+            totalRedeemedAmount += amount;
 
             emit TokensRedeemed(beneficiary, amount);
             return amount;
@@ -267,10 +291,9 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             //Burn ParmaFanTokenM from the msg.sender
             _burn(beneficiary, amount);
 
-            _vesting[beneficiary].redeemed = _vesting[beneficiary].redeemed.add(
-                amount
-            );
-            totalRedeemedAmount.add(amount);
+            _vesting[beneficiary].redeemed = _vesting[beneficiary]
+                .redeemed += amount;
+            totalRedeemedAmount += amount;
 
             emit TokensRedeemed(beneficiary, amount);
             return amount;
@@ -287,68 +310,62 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
             "ParmaFanTokenM: No tokens to unlock"
         );
         require(
-            block.timestamp >= _vesting[beneficiary].cliff,
+            block.timestamp > _vesting[beneficiary].cliff,
             "ParmaFanTokenM: Tokens are not unlockable yet"
         );
 
         uint256 amount;
-        if (
-            _vesting[beneficiary].vestingType == 1 ||
-            _vesting[beneficiary].vestingType == 4
-        ) {
-            uint timeDiff = block.timestamp - _vesting[beneficiary].start;
-            uint timeDiffInMonths = (timeDiff / 30 days) -
-                (_vesting[beneficiary].cliff / 30 days);
-
-            require(
-                timeDiffInMonths > 0,
-                "ParmaFanTokenM: Tokens are not unlockable yet"
-            );
-
-            uint256 monthlyRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(5)
-                .div(100);
-
-            // 5% of the total amount of tokens to unlock every month
-            uint256 totalAmountRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(15)
-                .div(100) / 5;
-            uint256 amountRedemptions = (_vesting[beneficiary].amount -
-                _vesting[beneficiary].redeemed) / 5;
-
+        if (_vesting[beneficiary].vestingType == 1) {
+            uint256 totalMonth = 17;
+            //Calculate months passed since the cliff
+            uint256 monthsPassed = (block.timestamp -
+                _vesting[beneficiary].cliff) /
+                30 days +
+                1;
+            if (monthsPassed > 17) monthsPassed = 17;
+            //Calculate amount for each month
+            uint256 amountPerMonth = _vesting[beneficiary].amount / 20;
+            //Calculate amount to unlock
             amount =
-                (totalAmountRedemptions - amountRedemptions) *
-                monthlyRedemptions;
+                (_vesting[beneficiary].amount -
+                    _vesting[beneficiary].redeemed) -
+                ((totalMonth - monthsPassed) * amountPerMonth);
+            require(amount > 0, "ParmaFanTokenM: All tokens are unlocked");
         } else if (_vesting[beneficiary].vestingType == 2) {
-            uint timeDiff = block.timestamp - _vesting[beneficiary].start;
-            uint timeDiffInMonths = (timeDiff / 30 days) -
-                (_vesting[beneficiary].cliff / 30 days);
-
-            require(
-                timeDiffInMonths > 0,
-                "ParmaFanTokenM: Tokens are not unlockable yet"
-            );
-
-            uint256 monthlyRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(1333)
-                .div(10000);
-
-            // 5% of the total amount of tokens to unlock every month
-            uint256 totalAmountRedemptions = _vesting[beneficiary]
-                .amount
-                .mul(20)
-                .div(1333);
-            uint256 amountRedemptions = (_vesting[beneficiary].amount -
-                _vesting[beneficiary].redeemed).mul(100).div(1333);
-
+            uint256 totalMonth = 6;
+            //Calculate months passed since the cliff
+            uint256 monthsPassed = (block.timestamp -
+                _vesting[beneficiary].cliff) /
+                30 days +
+                1;
+            if (monthsPassed > 6) monthsPassed = 6;
+            //Calculate amount for each month (13.33%)
+            uint256 amountPerMonth = (_vesting[beneficiary].amount * 1333) /
+                10000;
+            //Calculate amount to unlock
             amount =
-                (totalAmountRedemptions - amountRedemptions) *
-                monthlyRedemptions;
+                (_vesting[beneficiary].amount -
+                    _vesting[beneficiary].redeemed) -
+                ((totalMonth - monthsPassed) * amountPerMonth);
+            require(amount > 0, "ParmaFanTokenM: All tokens are unlocked");
         } else if (_vesting[beneficiary].vestingType == 3) {
             amount = _vesting[beneficiary].amount;
+        } else if (_vesting[beneficiary].vestingType == 4) {
+            uint256 totalMonth = 20;
+            //Calculate months passed since the cliff
+            uint256 monthsPassed = (block.timestamp -
+                _vesting[beneficiary].cliff) /
+                30 days +
+                1;
+            if (monthsPassed > 20) monthsPassed = 20;
+            //Calculate amount for each month (13.33%)
+            uint256 amountPerMonth = _vesting[beneficiary].amount / 20;
+            //Calculate amount to unlock
+            amount =
+                (_vesting[beneficiary].amount -
+                    _vesting[beneficiary].redeemed) -
+                ((totalMonth - monthsPassed) * amountPerMonth);
+            require(amount > 0, "ParmaFanTokenM: All tokens are unlocked");
         }
 
         return amount;

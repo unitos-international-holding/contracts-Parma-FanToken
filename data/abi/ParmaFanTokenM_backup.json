@@ -351,6 +351,50 @@
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "getAddressDetails",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "vestingType",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "start",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "cliff",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "redeemed",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "locked",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "getLockedTokens",
     "outputs": [
