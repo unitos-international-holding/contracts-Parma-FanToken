@@ -92,9 +92,7 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
 
     function lockTokens(
         uint256 amount
-    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (bool) {
-        require(!lockTokensStatus, "Tokens already lock");
-
+    ) public onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256) {
         ParmaFanToken(parmaFanTokenAddress).transferFrom(
             _msgSender(),
             address(this),
@@ -104,8 +102,7 @@ contract ParmaFanTokenM_backup is ERC20, AccessControl {
         emit TokensLocked(_msgSender(), amount);
 
         ParmaFanTokenLocked += amount;
-        lockTokensStatus = true;
-        return lockTokensStatus;
+        return ParmaFanTokenLocked;
     }
 
     /*
